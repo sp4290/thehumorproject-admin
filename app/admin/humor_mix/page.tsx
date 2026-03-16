@@ -2,12 +2,12 @@
 
 import AdminResourcePage from "@/components/AdminResourcePage";
 
-export default function CaptionsPage() {
+export default function HumorMixPage() {
     return (
         <AdminResourcePage
-            title="Captions"
-            tableName="captions"
-            mode="read"
+            title="Humor Mix"
+            tableName="humor_flavor_mix"
+            mode="update"
         />
     );
 }

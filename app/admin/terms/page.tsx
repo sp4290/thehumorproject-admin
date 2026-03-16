@@ -2,12 +2,12 @@
 
 import AdminResourcePage from "@/components/AdminResourcePage";
 
-export default function CaptionsPage() {
+export default function TermsPage() {
     return (
         <AdminResourcePage
-            title="Captions"
-            tableName="captions"
-            mode="read"
+            title="Terms"
+            tableName="terms"
+            mode="crud"
         />
     );
 }

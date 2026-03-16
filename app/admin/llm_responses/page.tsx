@@ -2,11 +2,11 @@
 
 import AdminResourcePage from "@/components/AdminResourcePage";
 
-export default function CaptionsPage() {
+export default function LlmResponsesPage() {
     return (
         <AdminResourcePage
-            title="Captions"
-            tableName="captions"
+            title="LLM Responses"
+            tableName="llm_responses"
             mode="read"
         />
     );

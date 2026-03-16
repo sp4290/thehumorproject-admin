@@ -1,43 +1,65 @@
-"use client"
+"use client";
 
-import { supabase } from "@/lib/supabase"
-import { useEffect, useState } from "react"
+import { supabase } from "@/lib/supabase";
+import { useEffect, useState } from "react";
 
 export default function LoginButton() {
-
-    const [user,setUser] = useState<any>(null)
+    const [mounted, setMounted] = useState(false);
+    const [user, setUser] = useState<any>(null);
+    const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        supabase.auth.getUser().then(({data})=>{
-            setUser(data.user)
-        })
-    },[])
+        setMounted(true);
+
+        supabase.auth.getUser().then(({ data }) => {
+            setUser(data.user);
+        });
+
+        const {
+            data: { subscription },
+        } = supabase.auth.onAuthStateChange(async (_event, session) => {
+            setUser(session?.user ?? null);
+        });
+
+        return () => {
+            subscription.unsubscribe();
+        };
+    }, []);
 
     const login = async () => {
+        setLoading(true);
 
         await supabase.auth.signInWithOAuth({
-            provider:"google",
-            options:{
-                redirectTo:`${window.location.origin}/auth/callback`
-            }
-        })
-
-    }
+            provider: "google",
+            options: {
+                redirectTo: `${window.location.origin}/auth/callback`,
+            },
+        });
+    };
 
     const logout = async () => {
-        await supabase.auth.signOut()
-        window.location.reload()
+        setLoading(true);
+
+        await supabase.auth.signOut();
+
+        window.location.href = "/";
+    };
+
+    if (!mounted) {
+        return <button disabled>Loading...</button>;
     }
 
     return (
         <div>
-
             {!user ? (
-                <button onClick={login}>Login with Google</button>
-            ):(
-                <button onClick={logout}>Logout</button>
+                <button onClick={login} disabled={loading}>
+                    {loading ? "Loading..." : "Login with Google"}
+                </button>
+            ) : (
+                <button onClick={logout} disabled={loading}>
+                    {loading ? "Logging out..." : "Logout"}
+                </button>
             )}
-
         </div>
-    )
+    );
 }
