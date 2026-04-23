@@ -8,6 +8,12 @@ export default function CaptionsPage() {
             title="Captions"
             tableName="captions"
             mode="read"
+            statsConfig={{
+                enabled: true,
+                ratingsTable: "caption_votes",
+                ratingCaptionForeignKey: "caption_id",
+                captionTextField: "content",
+            }}
         />
     );
 }
