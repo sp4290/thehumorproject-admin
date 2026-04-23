@@ -153,10 +153,15 @@ export default function AdminResourcePage({
                     totalRatedRows: 0,
                     totalRatings: 0,
                     overallAverageRating: null,
+
                     mostRatedCaptionId: null,
                     mostRatedCaptionCount: 0,
+
                     highestAverageCaptionId: null,
                     highestAverageCaptionValue: null,
+
+                    lowestAverageCaptionId: null,
+                    lowestAverageCaptionValue: null,
                 });
                 return;
             }
