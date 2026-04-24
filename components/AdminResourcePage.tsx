@@ -227,13 +227,12 @@ export default function AdminResourcePage({
             .select(`id, ${captionField}`)
             .in("id", uniqueIds);
 
-        const rows = (data || []) as any[];
-
         if (error) throw error;
 
         const lookup: Record<string, string> = {};
+        const rows = (data || []) as any[];
 
-        for (const row of data || []) {
+        for (const row of rows) {
             lookup[row.id] = row[captionField] || row.id;
         }
 
