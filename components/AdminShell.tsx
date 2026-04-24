@@ -78,17 +78,25 @@ export default function AdminShell({ children }: { children: ReactNode }) {
 
     if (state === "not_superadmin") {
         return (
-            <div style={{ padding: 40 }}>
+            <div style={{ padding: 40, maxWidth: 600 }}>
                 <h1>Humor Project Admin</h1>
-                <p>Logged in as: {email}</p>
+
                 <p style={{ marginTop: 10 }}>
+                    Logged in as: <b>{email}</b>
+                </p>
+
+                <p style={{ marginTop: 20 }}>
                     Your account is logged in but it is not marked as <b>superadmin</b>.
                 </p>
-                <p>You must set <b>is_superadmin = true</b> in the profiles table.</p>
-                <LoginButton />
-                <p style={{ marginTop: 20 }}>
-                    <a href="/">Go back home</a>
+
+                <p>
+                    You must set <b>is_superadmin = true</b> in the profiles table in Supabase.
                 </p>
+
+                {/* move logout button lower */}
+                <div style={{ marginTop: 30 }}>
+                    <LoginButton />
+                </div>
             </div>
         );
     }

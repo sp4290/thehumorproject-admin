@@ -14,6 +14,12 @@ export default function CaptionsPage() {
                 ratingCaptionForeignKey: "caption_id",
                 captionTextField: "content",
             }}
+            paginationConfig={{
+                enabled: true,
+                pageSize: 30,
+                sortField: "created_datetime_utc",
+                defaultDirection: "desc",
+            }}
         />
     );
 }

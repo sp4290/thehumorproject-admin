@@ -4,6 +4,16 @@ import { supabase } from "@/lib/supabase";
 import { useEffect, useMemo, useState } from "react";
 
 type Mode = "read" | "update" | "crud";
+type SortDirection = "asc" | "desc";
+
+type RatingSortMode =
+    | "most"
+    | "high"
+    | "low"
+    | "up"
+    | "down"
+    | "newest"
+    | "oldest";
 
 type StatsConfig = {
     enabled: boolean;
@@ -13,36 +23,65 @@ type StatsConfig = {
     ratingValueField?: string;
 };
 
+type PaginationConfig = {
+    enabled: boolean;
+    pageSize?: number;
+    sortField?: string;
+    defaultDirection?: SortDirection;
+};
+
 type Props = {
     title: string;
     tableName: string;
     mode: Mode;
     previewImageField?: string;
     statsConfig?: StatsConfig;
+    paginationConfig?: PaginationConfig;
 };
 
 type CaptionStat = {
     captionId: string;
     ratingCount: number;
-    averageRating: number | null;
-    minRating: number | null;
-    maxRating: number | null;
+    upVotes: number;
+    downVotes: number;
+    neutralVotes: number;
+    scoreAverage: number | null;
+    upvoteRatio: number | null;
 };
 
 type StatsSummary = {
     totalRows: number;
     totalRatedRows: number;
-    totalRatings: number;
-    overallAverageRating: number | null;
+    totalRatingVotes: number;
+    totalUpVotes: number;
+    totalDownVotes: number;
+    totalNeutralVotes: number;
+    overallAverageScore: number | null;
+    overallUpvoteRatio: number | null;
 
     mostRatedCaptionId: string | null;
+    mostRatedCaptionText: string | null;
     mostRatedCaptionCount: number;
 
-    highestAverageCaptionId: string | null;
-    highestAverageCaptionValue: number | null;
+    highestRatioCaptionId: string | null;
+    highestRatioCaptionText: string | null;
+    highestRatioUpVotes: number;
+    highestRatioDownVotes: number;
+    highestRatioValue: number | null;
 
-    lowestAverageCaptionId: string | null;
-    lowestAverageCaptionValue: number | null;
+    lowestRatioCaptionId: string | null;
+    lowestRatioCaptionText: string | null;
+    lowestRatioUpVotes: number;
+    lowestRatioDownVotes: number;
+    lowestRatioValue: number | null;
+
+    mostUpvotesCaptionId: string | null;
+    mostUpvotesCaptionText: string | null;
+    mostUpvotesCount: number;
+
+    mostDownvotesCaptionId: string | null;
+    mostDownvotesCaptionText: string | null;
+    mostDownvotesCount: number;
 };
 
 function guessRatingValueField(row: any): string | null {
@@ -74,13 +113,37 @@ function guessRatingValueField(row: any): string | null {
     return null;
 }
 
+function normalizeVote(value: any): -1 | 0 | 1 | null {
+    const numberValue =
+        typeof value === "number"
+            ? value
+            : value !== null && value !== undefined && value !== ""
+                ? Number(value)
+                : NaN;
+
+    if (Number.isNaN(numberValue)) return null;
+    if (numberValue > 0) return 1;
+    if (numberValue < 0) return -1;
+    return 0;
+}
+
+function getUpvoteRatio(upVotes: number, downVotes: number) {
+    const totalDirectionalVotes = upVotes + downVotes;
+    if (totalDirectionalVotes === 0) return null;
+    return upVotes / totalDirectionalVotes;
+}
+
 export default function AdminResourcePage({
                                               title,
                                               tableName,
                                               mode,
                                               previewImageField,
                                               statsConfig,
+                                              paginationConfig,
                                           }: Props) {
+    const pageSize = paginationConfig?.pageSize || 30;
+    const sortField = paginationConfig?.sortField || "created_datetime_utc";
+
     const [rows, setRows] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -92,12 +155,31 @@ export default function AdminResourcePage({
     const [lastDeletedRow, setLastDeletedRow] = useState<any | null>(null);
     const [showUndo, setShowUndo] = useState(false);
 
+    const [loadedLimit, setLoadedLimit] = useState(pageSize);
+    const [sortDirection] = useState<SortDirection>(
+        paginationConfig?.defaultDirection || "desc"
+    );
+    const [ratingSortMode, setRatingSortMode] = useState<RatingSortMode>("most");
+    const [totalRowCount, setTotalRowCount] = useState<number | null>(null);
+
     const [statsLoading, setStatsLoading] = useState(false);
     const [statsError, setStatsError] = useState("");
     const [statsByCaptionId, setStatsByCaptionId] = useState<Record<string, CaptionStat>>({});
     const [statsSummary, setStatsSummary] = useState<StatsSummary | null>(null);
 
-    const sortedRows = useMemo(() => {
+    const formatNumber = (value: number | null) => {
+        if (value === null) return "—";
+        const rounded = Number(value.toFixed(2));
+        if (Object.is(rounded, -0)) return "0.00";
+        return rounded.toFixed(2);
+    };
+
+    const formatPercent = (value: number | null) => {
+        if (value === null) return "—";
+        return `${(value * 100).toFixed(1)}%`;
+    };
+
+    const visibleRows = useMemo(() => {
         if (!highlightId) return rows;
 
         const selected = rows.find((row) => row.id === highlightId);
@@ -106,248 +188,361 @@ export default function AdminResourcePage({
         return selected ? [selected, ...others] : rows;
     }, [rows, highlightId]);
 
-    const formatNumber = (value: number | null) => {
-        if (value === null) return "—";
+    const fetchAllRatings = async () => {
+        if (!statsConfig?.enabled) return [];
 
-        const rounded = Number(value.toFixed(2));
-        if (Object.is(rounded, -0)) return "0.00";
+        const allRows: any[] = [];
+        const batchSize = 1000;
+        let from = 0;
 
-        return rounded.toFixed(2);
+        while (true) {
+            const to = from + batchSize - 1;
+
+            const { data, error } = await supabase
+                .from(statsConfig.ratingsTable)
+                .select("*")
+                .range(from, to);
+
+            if (error) throw error;
+
+            allRows.push(...(data || []));
+
+            if (!data || data.length < batchSize) break;
+
+            from += batchSize;
+        }
+
+        return allRows;
     };
 
-    const getRowTitle = (row: any) => {
-        if (!row) return "—";
+    const fetchCaptionTextByIds = async (captionIds: string[]) => {
+        const uniqueIds = Array.from(new Set(captionIds.filter(Boolean)));
+
+        if (uniqueIds.length === 0) return {};
 
         const captionField = statsConfig?.captionTextField || "content";
 
-        if (row?.[captionField]) {
-            return String(row[captionField]);
+        const { data, error } = await supabase
+            .from(tableName)
+            .select(`id, ${captionField}`)
+            .in("id", uniqueIds);
+
+        if (error) throw error;
+
+        const lookup: Record<string, string> = {};
+
+        for (const row of data || []) {
+            lookup[row.id] = row[captionField] || row.id;
         }
 
-        if (row?.content) return String(row.content);
-        if (row?.caption) return String(row.caption);
-        if (row?.title) return String(row.title);
-        if (row?.name) return String(row.name);
-
-        return row?.id ? `Row ${row.id}` : "Untitled row";
+        return lookup;
     };
 
-    const loadStats = async (captionRows: any[]) => {
-        if (!statsConfig?.enabled) {
-            setStatsByCaptionId({});
-            setStatsSummary(null);
-            setStatsError("");
-            return;
+    const fetchCaptionRowsByIds = async (captionIds: string[]) => {
+        const uniqueIds = Array.from(new Set(captionIds.filter(Boolean)));
+
+        if (uniqueIds.length === 0) return [];
+
+        const { data, error } = await supabase
+            .from(tableName)
+            .select("*")
+            .in("id", uniqueIds);
+
+        if (error) throw error;
+
+        const orderMap = new Map(uniqueIds.map((id, index) => [id, index]));
+
+        return (data || []).sort((a, b) => {
+            return (orderMap.get(a.id) ?? 0) - (orderMap.get(b.id) ?? 0);
+        });
+    };
+
+    const buildGroupedStats = (allRatings: any[]) => {
+        const firstRatingRow = allRatings[0];
+        const detectedValueField =
+            statsConfig?.ratingValueField ||
+            (firstRatingRow ? guessRatingValueField(firstRatingRow) : null);
+
+        if (!detectedValueField && allRatings.length > 0) {
+            throw new Error(`Could not find a rating column in ${statsConfig?.ratingsTable}.`);
         }
 
-        setStatsLoading(true);
-        setStatsError("");
+        const grouped: Record<string, CaptionStat> = {};
 
-        try {
-            const captionIds = captionRows.map((row) => row.id).filter(Boolean);
+        for (const item of allRatings) {
+            const captionId = item?.[statsConfig!.ratingCaptionForeignKey];
+            if (!captionId) continue;
 
-            if (captionIds.length === 0) {
-                setStatsByCaptionId({});
-                setStatsSummary({
-                    totalRows: 0,
-                    totalRatedRows: 0,
-                    totalRatings: 0,
-                    overallAverageRating: null,
+            const normalizedVote = normalizeVote(item?.[detectedValueField!]);
+            if (normalizedVote === null) continue;
 
-                    mostRatedCaptionId: null,
-                    mostRatedCaptionCount: 0,
-
-                    highestAverageCaptionId: null,
-                    highestAverageCaptionValue: null,
-
-                    lowestAverageCaptionId: null,
-                    lowestAverageCaptionValue: null,
-                });
-                return;
-            }
-
-            const { data: ratingsData, error: ratingsError } = await supabase
-                .from(statsConfig.ratingsTable)
-                .select("*")
-                .in(statsConfig.ratingCaptionForeignKey, captionIds)
-                .limit(10000);
-
-            if (ratingsError) {
-                setStatsError(ratingsError.message);
-                setStatsByCaptionId({});
-                setStatsSummary(null);
-                return;
-            }
-
-            const firstRatingRow = ratingsData?.[0];
-            const detectedValueField =
-                statsConfig.ratingValueField ||
-                (firstRatingRow ? guessRatingValueField(firstRatingRow) : null);
-
-            if (!detectedValueField) {
-                setStatsError(
-                    `Could not find a numeric rating column in ${statsConfig.ratingsTable}.`
-                );
-                setStatsByCaptionId({});
-                setStatsSummary(null);
-                return;
-            }
-
-            const grouped: Record<string, number[]> = {};
-
-            for (const item of ratingsData || []) {
-                const captionId = item?.[statsConfig.ratingCaptionForeignKey];
-                const rawValue = item?.[detectedValueField];
-
-                if (!captionId) continue;
-
-                const numericValue =
-                    typeof rawValue === "number"
-                        ? rawValue
-                        : rawValue !== null && rawValue !== undefined && rawValue !== ""
-                            ? Number(rawValue)
-                            : NaN;
-
-                if (!grouped[captionId]) {
-                    grouped[captionId] = [];
-                }
-
-                if (!Number.isNaN(numericValue)) {
-                    grouped[captionId].push(numericValue);
-                }
-            }
-
-            const nextStatsByCaptionId: Record<string, CaptionStat> = {};
-            let totalRatings = 0;
-            let totalRatingSum = 0;
-            let totalRatedRows = 0;
-
-            let mostRatedCaptionId: string | null = null;
-            let mostRatedCaptionCount = 0;
-
-            let highestAverageCaptionId: string | null = null;
-            let highestAverageCaptionValue: number | null = null;
-            let lowestAverageCaptionId: string | null = null;
-            let lowestAverageCaptionValue: number | null = null;
-
-            for (const row of captionRows) {
-                const values = grouped[row.id] || [];
-                const ratingCount = values.length;
-                const ratingSum = values.reduce((sum, value) => sum + value, 0);
-                const averageRating = ratingCount > 0 ? ratingSum / ratingCount : null;
-                const minRating = ratingCount > 0 ? Math.min(...values) : null;
-                const maxRating = ratingCount > 0 ? Math.max(...values) : null;
-
-                nextStatsByCaptionId[row.id] = {
-                    captionId: row.id,
-                    ratingCount,
-                    averageRating,
-                    minRating,
-                    maxRating,
+            if (!grouped[captionId]) {
+                grouped[captionId] = {
+                    captionId,
+                    ratingCount: 0,
+                    upVotes: 0,
+                    downVotes: 0,
+                    neutralVotes: 0,
+                    scoreAverage: null,
+                    upvoteRatio: null,
                 };
-
-                if (ratingCount > 0) {
-                    totalRatedRows += 1;
-                    totalRatings += ratingCount;
-                    totalRatingSum += ratingSum;
-                }
-
-                if (ratingCount > mostRatedCaptionCount) {
-                    mostRatedCaptionCount = ratingCount;
-                    mostRatedCaptionId = row.id;
-                }
-
-                if (
-                    averageRating !== null &&
-                    (highestAverageCaptionValue === null ||
-                        averageRating > highestAverageCaptionValue)
-                ) {
-                    highestAverageCaptionValue = averageRating;
-                    highestAverageCaptionId = row.id;
-                }
-
-                if (
-                    averageRating !== null &&
-                    (lowestAverageCaptionValue === null ||
-                        averageRating < lowestAverageCaptionValue)
-                ) {
-                    lowestAverageCaptionValue = averageRating;
-                    lowestAverageCaptionId = row.id;
-                }
             }
 
-            setStatsByCaptionId(nextStatsByCaptionId);
-            setStatsSummary({
-                totalRows: captionRows.length,
-                totalRatedRows,
-                totalRatings,
-                overallAverageRating: totalRatings > 0 ? totalRatingSum / totalRatings : null,
+            grouped[captionId].ratingCount += 1;
 
-                mostRatedCaptionId,
-                mostRatedCaptionCount,
-
-                highestAverageCaptionId,
-                highestAverageCaptionValue,
-
-                lowestAverageCaptionId,
-                lowestAverageCaptionValue,
-            });
-        } catch (e: any) {
-            setStatsError(e?.message || "Failed to load statistics");
-            setStatsByCaptionId({});
-            setStatsSummary(null);
-        } finally {
-            setStatsLoading(false);
+            if (normalizedVote > 0) grouped[captionId].upVotes += 1;
+            else if (normalizedVote < 0) grouped[captionId].downVotes += 1;
+            else grouped[captionId].neutralVotes += 1;
         }
+
+        for (const stat of Object.values(grouped)) {
+            stat.scoreAverage =
+                stat.ratingCount > 0
+                    ? (stat.upVotes - stat.downVotes) / stat.ratingCount
+                    : null;
+
+            stat.upvoteRatio = getUpvoteRatio(stat.upVotes, stat.downVotes);
+        }
+
+        return grouped;
     };
 
-    const load = async () => {
+    const getSortedCaptionIds = (statsMap: Record<string, CaptionStat>) => {
+        const stats = Object.values(statsMap);
+
+        stats.sort((a, b) => {
+            if (ratingSortMode === "most") {
+                return b.ratingCount - a.ratingCount;
+            }
+
+            if (ratingSortMode === "up") {
+                return b.upVotes - a.upVotes || b.ratingCount - a.ratingCount;
+            }
+
+            if (ratingSortMode === "down") {
+                return b.downVotes - a.downVotes || b.ratingCount - a.ratingCount;
+            }
+
+            if (ratingSortMode === "high" || ratingSortMode === "low") {
+                const aRatio = a.upvoteRatio;
+                const bRatio = b.upvoteRatio;
+
+                if (aRatio === null && bRatio === null) {
+                    return b.ratingCount - a.ratingCount;
+                }
+
+                if (aRatio === null) return 1;
+                if (bRatio === null) return -1;
+
+                if (ratingSortMode === "high") {
+                    return bRatio - aRatio || b.ratingCount - a.ratingCount;
+                }
+
+                return aRatio - bRatio || b.ratingCount - a.ratingCount;
+            }
+
+            // fallback
+            return 0;
+        });
+
+        return stats.map((stat) => stat.captionId);
+    };
+
+    const buildStatsSummary = async (
+        statsMap: Record<string, CaptionStat>,
+        totalCaptionsCount: number
+    ) => {
+        const stats = Object.values(statsMap);
+
+        let totalRatingVotes = 0;
+        let totalUpVotes = 0;
+        let totalDownVotes = 0;
+        let totalNeutralVotes = 0;
+
+        let mostRated: CaptionStat | null = null;
+        let highestRatio: CaptionStat | null = null;
+        let lowestRatio: CaptionStat | null = null;
+        let mostUpvotes: CaptionStat | null = null;
+        let mostDownvotes: CaptionStat | null = null;
+
+        for (const stat of stats) {
+            totalRatingVotes += stat.ratingCount;
+            totalUpVotes += stat.upVotes;
+            totalDownVotes += stat.downVotes;
+            totalNeutralVotes += stat.neutralVotes;
+
+            if (!mostRated || stat.ratingCount > mostRated.ratingCount) {
+                mostRated = stat;
+            }
+
+            if (
+                stat.upvoteRatio !== null &&
+                (!highestRatio ||
+                    highestRatio.upvoteRatio === null ||
+                    stat.upvoteRatio > highestRatio.upvoteRatio ||
+                    (stat.upvoteRatio === highestRatio.upvoteRatio &&
+                        stat.ratingCount > highestRatio.ratingCount))
+            ) {
+                highestRatio = stat;
+            }
+
+            if (
+                stat.upvoteRatio !== null &&
+                (!lowestRatio ||
+                    lowestRatio.upvoteRatio === null ||
+                    stat.upvoteRatio < lowestRatio.upvoteRatio ||
+                    (stat.upvoteRatio === lowestRatio.upvoteRatio &&
+                        stat.ratingCount > lowestRatio.ratingCount))
+            ) {
+                lowestRatio = stat;
+            }
+
+            if (!mostUpvotes || stat.upVotes > mostUpvotes.upVotes) {
+                mostUpvotes = stat;
+            }
+
+            if (!mostDownvotes || stat.downVotes > mostDownvotes.downVotes) {
+                mostDownvotes = stat;
+            }
+        }
+
+        const captionTextLookup = await fetchCaptionTextByIds([
+            mostRated?.captionId || "",
+            highestRatio?.captionId || "",
+            lowestRatio?.captionId || "",
+            mostUpvotes?.captionId || "",
+            mostDownvotes?.captionId || "",
+        ]);
+
+        setStatsSummary({
+            totalRows: totalCaptionsCount,
+            totalRatedRows: stats.length,
+            totalRatingVotes,
+            totalUpVotes,
+            totalDownVotes,
+            totalNeutralVotes,
+            overallAverageScore:
+                totalRatingVotes > 0 ? (totalUpVotes - totalDownVotes) / totalRatingVotes : null,
+            overallUpvoteRatio: getUpvoteRatio(totalUpVotes, totalDownVotes),
+
+            mostRatedCaptionId: mostRated?.captionId || null,
+            mostRatedCaptionText: mostRated
+                ? captionTextLookup[mostRated.captionId] || mostRated.captionId
+                : null,
+            mostRatedCaptionCount: mostRated?.ratingCount || 0,
+
+            highestRatioCaptionId: highestRatio?.captionId || null,
+            highestRatioCaptionText: highestRatio
+                ? captionTextLookup[highestRatio.captionId] || highestRatio.captionId
+                : null,
+            highestRatioUpVotes: highestRatio?.upVotes || 0,
+            highestRatioDownVotes: highestRatio?.downVotes || 0,
+            highestRatioValue: highestRatio?.upvoteRatio ?? null,
+
+            lowestRatioCaptionId: lowestRatio?.captionId || null,
+            lowestRatioCaptionText: lowestRatio
+                ? captionTextLookup[lowestRatio.captionId] || lowestRatio.captionId
+                : null,
+            lowestRatioUpVotes: lowestRatio?.upVotes || 0,
+            lowestRatioDownVotes: lowestRatio?.downVotes || 0,
+            lowestRatioValue: lowestRatio?.upvoteRatio ?? null,
+
+            mostUpvotesCaptionId: mostUpvotes?.captionId || null,
+            mostUpvotesCaptionText: mostUpvotes
+                ? captionTextLookup[mostUpvotes.captionId] || mostUpvotes.captionId
+                : null,
+            mostUpvotesCount: mostUpvotes?.upVotes || 0,
+
+            mostDownvotesCaptionId: mostDownvotes?.captionId || null,
+            mostDownvotesCaptionText: mostDownvotes
+                ? captionTextLookup[mostDownvotes.captionId] || mostDownvotes.captionId
+                : null,
+            mostDownvotesCount: mostDownvotes?.downVotes || 0,
+        });
+    };
+
+    const load = async (refreshStats = false) => {
         setLoading(true);
         setError("");
+        setStatsError("");
+
+        const alreadyHasStats =
+            statsSummary !== null && Object.keys(statsByCaptionId).length > 0;
+
+        const shouldReloadStats = refreshStats || !alreadyHasStats;
+
+        if (shouldReloadStats) {
+            setStatsLoading(true);
+        }
 
         try {
-            const { data, error } = await supabase.from(tableName).select("*").limit(100);
+            const { count, error: countError } = await supabase
+                .from(tableName)
+                .select("id", { count: "exact", head: true });
 
-            if (error) {
-                setError(error.message);
-                setRows([]);
-                setStatsByCaptionId({});
-                setStatsSummary(null);
-            } else {
-                const nextRows = data || [];
-                setRows(nextRows);
+            if (countError) throw countError;
 
-                if (statsConfig?.enabled) {
-                    await loadStats(nextRows);
-                } else {
-                    setStatsByCaptionId({});
-                    setStatsSummary(null);
-                    setStatsError("");
+            const totalCaptionsCount = count ?? 0;
+            setTotalRowCount(totalCaptionsCount);
+
+            if (statsConfig?.enabled && paginationConfig?.enabled) {
+                // 🔥 NEW: handle newest / oldest sorting WITHOUT stats
+                if (ratingSortMode === "newest" || ratingSortMode === "oldest") {
+                    const { data, error } = await supabase
+                        .from(tableName)
+                        .select("*")
+                        .order(sortField, {
+                            ascending: ratingSortMode === "oldest",
+                        })
+                        .range(0, loadedLimit - 1);
+
+                    if (error) throw error;
+
+                    setRows(data || []);
+                    return;
                 }
+
+                let statsMap = statsByCaptionId;
+
+                if (shouldReloadStats) {
+                    const allRatings = await fetchAllRatings();
+                    statsMap = buildGroupedStats(allRatings);
+                    await buildStatsSummary(statsMap, totalCaptionsCount);
+                    setStatsByCaptionId(statsMap);
+                }
+
+                const sortedCaptionIds = getSortedCaptionIds(statsMap);
+                const idsToLoad = sortedCaptionIds.slice(0, loadedLimit);
+                const loadedRows = await fetchCaptionRowsByIds(idsToLoad);
+
+                setRows(loadedRows);
             }
         } catch (e: any) {
             setError(e?.message || "Failed to load data");
+            setStatsError(e?.message || "Failed to load statistics");
             setRows([]);
             setStatsByCaptionId({});
             setStatsSummary(null);
+            setTotalRowCount(null);
         } finally {
             setLoading(false);
+
+            if (shouldReloadStats) {
+                setStatsLoading(false);
+            }
         }
     };
 
     useEffect(() => {
-        load();
-    }, [tableName]);
+        load(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tableName, loadedLimit, ratingSortMode]);
 
     const createRow = async () => {
         try {
             const payload = JSON.parse(createText);
 
-            const { data, error } = await supabase
-                .from(tableName)
-                .insert(payload)
-                .select()
-                .single();
+            const { error } = await supabase.from(tableName).insert(payload);
 
             if (error) {
                 alert(error.message);
@@ -356,20 +551,7 @@ export default function AdminResourcePage({
 
             setCreateText("{}");
             setMessage("Created successfully.");
-            setHighlightId(data?.id || null);
-            setShowUndo(false);
-            setLastDeletedRow(null);
-
-            if (data) {
-                const nextRows = [data, ...rows];
-                setRows(nextRows);
-
-                if (statsConfig?.enabled) {
-                    await loadStats(nextRows);
-                }
-            } else {
-                await load();
-            }
+            await load(true);
         } catch {
             alert("Invalid JSON");
         }
@@ -408,16 +590,7 @@ export default function AdminResourcePage({
             setShowUndo(false);
             setLastDeletedRow(null);
 
-            if (data) {
-                const nextRows = rows.map((row) => (row.id === data.id ? data : row));
-                setRows(nextRows);
-
-                if (statsConfig?.enabled) {
-                    await loadStats(nextRows);
-                }
-            } else {
-                await load();
-            }
+            await load(true);
         } catch {
             alert("Invalid JSON");
         }
@@ -434,8 +607,6 @@ export default function AdminResourcePage({
             return;
         }
 
-        const nextRows = rows.filter((r) => r.id !== row.id);
-        setRows(nextRows);
         setLastDeletedRow(row);
         setShowUndo(true);
         setMessage("Row deleted.");
@@ -444,51 +615,37 @@ export default function AdminResourcePage({
             setHighlightId(null);
         }
 
-        if (statsConfig?.enabled) {
-            await loadStats(nextRows);
-        }
+        await load(true);
     };
 
     const undoDelete = async () => {
         if (!lastDeletedRow) return;
 
-        const { data, error } = await supabase
-            .from(tableName)
-            .insert(lastDeletedRow)
-            .select()
-            .single();
+        const { error } = await supabase.from(tableName).insert(lastDeletedRow);
 
         if (error) {
             alert(`Could not undo delete: ${error.message}`);
             return;
         }
 
-        const nextRows = [data, ...rows];
-        setRows(nextRows);
-        setHighlightId(data?.id || null);
+        setHighlightId(lastDeletedRow?.id || null);
         setMessage("Delete undone.");
         setShowUndo(false);
         setLastDeletedRow(null);
 
-        if (statsConfig?.enabled) {
-            await loadStats(nextRows);
-        }
+        await load(true);
     };
 
-    const mostRatedCaptionTitle =
-        statsSummary?.mostRatedCaptionId
-            ? getRowTitle(rows.find((r) => r.id === statsSummary.mostRatedCaptionId))
-            : null;
+    const scrollToTop = () => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+    };
 
-    const highestAverageCaptionTitle =
-        statsSummary?.highestAverageCaptionId
-            ? getRowTitle(rows.find((r) => r.id === statsSummary.highestAverageCaptionId))
-            : null;
-
-    const lowestAverageCaptionTitle =
-        statsSummary?.lowestAverageCaptionId
-            ? getRowTitle(rows.find((r) => r.id === statsSummary.lowestAverageCaptionId))
-            : null;
+    const scrollToBottom = () => {
+        window.scrollTo({
+            top: document.documentElement.scrollHeight,
+            behavior: "smooth",
+        });
+    };
 
     return (
         <div>
@@ -496,7 +653,7 @@ export default function AdminResourcePage({
             <p>Table: {tableName}</p>
 
             <div style={{ marginBottom: 20 }}>
-                <button onClick={load}>Reload</button>
+                <button onClick={() => load(true)}>Reload</button>
             </div>
 
             {statsConfig?.enabled && (
@@ -510,7 +667,7 @@ export default function AdminResourcePage({
                 >
                     <h3 style={{ marginTop: 0 }}>Caption Statistics</h3>
 
-                    {statsLoading && <p>Loading statistics...</p>}
+                    {statsLoading && <p>Loading total statistics...</p>}
                     {statsError && <p style={{ color: "red" }}>{statsError}</p>}
 
                     {!statsLoading && !statsError && statsSummary && (
@@ -523,65 +680,143 @@ export default function AdminResourcePage({
                                 }}
                             >
                                 <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
-                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Total captions shown</div>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Total captions</div>
                                     <div style={{ fontSize: 24, fontWeight: 700 }}>
                                         {statsSummary.totalRows}
                                     </div>
                                 </div>
 
                                 <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
-                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Captions with ratings</div>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Captions with votes</div>
                                     <div style={{ fontSize: 24, fontWeight: 700 }}>
                                         {statsSummary.totalRatedRows}
                                     </div>
                                 </div>
 
                                 <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
-                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Total ratings</div>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Total votes</div>
                                     <div style={{ fontSize: 24, fontWeight: 700 }}>
-                                        {statsSummary.totalRatings}
+                                        {statsSummary.totalRatingVotes}
                                     </div>
                                 </div>
 
                                 <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
-                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Overall average rating</div>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Total upvotes</div>
                                     <div style={{ fontSize: 24, fontWeight: 700 }}>
-                                        {formatNumber(statsSummary.overallAverageRating)}
+                                        {statsSummary.totalUpVotes}
+                                    </div>
+                                </div>
+
+                                <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Total downvotes</div>
+                                    <div style={{ fontSize: 24, fontWeight: 700 }}>
+                                        {statsSummary.totalDownVotes}
+                                    </div>
+                                </div>
+
+                                <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Overall average score</div>
+                                    <div style={{ fontSize: 24, fontWeight: 700 }}>
+                                        {formatNumber(statsSummary.overallAverageScore)}
+                                    </div>
+                                </div>
+
+                                <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
+                                    <div style={{ fontSize: 14, opacity: 0.8 }}>Overall upvote ratio</div>
+                                    <div style={{ fontSize: 24, fontWeight: 700 }}>
+                                        {formatPercent(statsSummary.overallUpvoteRatio)}
                                     </div>
                                 </div>
                             </div>
 
                             <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
                                 <p style={{ margin: "0 0 8px 0" }}>
-                                    <b>Most rated caption:</b> {mostRatedCaptionTitle || "—"}
+                                    <b>Caption with most votes:</b>{" "}
+                                    {statsSummary.mostRatedCaptionText || "—"}
                                 </p>
                                 <p style={{ margin: 0 }}>
-                                    Ratings: {statsSummary.mostRatedCaptionCount}
+                                    Votes: {statsSummary.mostRatedCaptionCount}
                                 </p>
                             </div>
 
                             <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
                                 <p style={{ margin: "0 0 8px 0" }}>
-                                    <b>Highest average rated caption:</b>{" "}
-                                    {highestAverageCaptionTitle || "—"}
+                                    <b>Caption with most upvotes:</b>{" "}
+                                    {statsSummary.mostUpvotesCaptionText || "—"}
                                 </p>
                                 <p style={{ margin: 0 }}>
-                                    Average rating: {formatNumber(statsSummary.highestAverageCaptionValue)}
+                                    Upvotes: {statsSummary.mostUpvotesCount}
                                 </p>
                             </div>
 
                             <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
                                 <p style={{ margin: "0 0 8px 0" }}>
-                                    <b>Lowest average rated caption:</b>{" "}
-                                    {lowestAverageCaptionTitle || "—"}
+                                    <b>Caption with most downvotes:</b>{" "}
+                                    {statsSummary.mostDownvotesCaptionText || "—"}
                                 </p>
                                 <p style={{ margin: 0 }}>
-                                    Average rating: {formatNumber(statsSummary.lowestAverageCaptionValue)}
+                                    Downvotes: {statsSummary.mostDownvotesCount}
                                 </p>
                             </div>
 
+                            <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
+                                <p style={{ margin: "0 0 8px 0" }}>
+                                    <b>Caption with highest upvote ratio:</b>{" "}
+                                    {statsSummary.highestRatioCaptionText || "—"}
+                                </p>
+                                <p style={{ margin: 0 }}>
+                                    Upvotes: {statsSummary.highestRatioUpVotes} | Downvotes:{" "}
+                                    {statsSummary.highestRatioDownVotes} | Upvote ratio:{" "}
+                                    {formatPercent(statsSummary.highestRatioValue)}
+                                </p>
+                            </div>
+
+                            <div style={{ border: "1px solid #444", borderRadius: 8, padding: 12 }}>
+                                <p style={{ margin: "0 0 8px 0" }}>
+                                    <b>Caption with lowest upvote ratio:</b>{" "}
+                                    {statsSummary.lowestRatioCaptionText || "—"}
+                                </p>
+                                <p style={{ margin: 0 }}>
+                                    Upvotes: {statsSummary.lowestRatioUpVotes} | Downvotes:{" "}
+                                    {statsSummary.lowestRatioDownVotes} | Upvote ratio:{" "}
+                                    {formatPercent(statsSummary.lowestRatioValue)}
+                                </p>
+                            </div>
                         </div>
                     )}
+                </div>
+            )}
+
+            {paginationConfig?.enabled && (
+                <div
+                    style={{
+                        marginBottom: 24,
+                        display: "flex",
+                        gap: 16,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                    }}
+                >
+                    <select
+                        value={ratingSortMode}
+                        onChange={(e) => {
+                            setRatingSortMode(e.target.value as RatingSortMode);
+                            setLoadedLimit(pageSize);
+                        }}
+                    >
+                        <option value="most">Most votes first</option>
+                        <option value="high">Highest upvote ratio first</option>
+                        <option value="low">Lowest upvote ratio first</option>
+                        <option value="up">Most upvotes first</option>
+                        <option value="down">Most downvotes first</option>
+                        <option value="newest">Newest captions first</option>
+                        <option value="oldest">Oldest captions first</option>
+                    </select>
+
+                    <span>
+                        Showing {rows.length}
+                        {totalRowCount !== null ? ` of ${totalRowCount}` : ""} captions
+                    </span>
                 </div>
             )}
 
@@ -625,10 +860,10 @@ export default function AdminResourcePage({
 
             {loading && <p>Loading...</p>}
             {error && <p style={{ color: "red" }}>{error}</p>}
-            {!loading && !error && sortedRows.length === 0 && <p>No rows found.</p>}
+            {!loading && !error && visibleRows.length === 0 && <p>No rows found.</p>}
 
             <div style={{ display: "grid", gap: 20 }}>
-                {sortedRows.map((row, index) => {
+                {visibleRows.map((row, index) => {
                     const stat = row.id ? statsByCaptionId[row.id] : null;
 
                     return (
@@ -662,10 +897,23 @@ export default function AdminResourcePage({
                                 >
                                     <h4 style={{ marginTop: 0, marginBottom: 10 }}>Rating Stats</h4>
                                     <div style={{ display: "grid", gap: 6 }}>
-                                        <div><b>Ratings:</b> {stat?.ratingCount ?? 0}</div>
-                                        <div><b>Average:</b> {formatNumber(stat?.averageRating ?? null)}</div>
-                                        <div><b>Min:</b> {formatNumber(stat?.minRating ?? null)}</div>
-                                        <div><b>Max:</b> {formatNumber(stat?.maxRating ?? null)}</div>
+                                        <div>
+                                            <b>Total votes:</b> {stat?.ratingCount ?? 0}
+                                        </div>
+                                        <div>
+                                            <b>Upvotes:</b> {stat?.upVotes ?? 0}
+                                        </div>
+                                        <div>
+                                            <b>Downvotes:</b> {stat?.downVotes ?? 0}
+                                        </div>
+                                        <div>
+                                            <b>Average score:</b>{" "}
+                                            {formatNumber(stat?.scoreAverage ?? null)}
+                                        </div>
+                                        <div>
+                                            <b>Upvote ratio:</b>{" "}
+                                            {formatPercent(stat?.upvoteRatio ?? null)}
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -724,6 +972,56 @@ export default function AdminResourcePage({
                         </div>
                     );
                 })}
+            </div>
+
+            {paginationConfig?.enabled &&
+                totalRowCount !== null &&
+                rows.length < totalRowCount && (
+                    <div style={{ marginTop: 24 }}>
+                        <button onClick={() => setLoadedLimit((prev) => prev + pageSize)}>
+                            Load 30 more
+                        </button>
+                    </div>
+                )}
+
+            <div
+                style={{
+                    position: "fixed",
+                    right: 24,
+                    bottom: 24,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    zIndex: 9999,
+                }}
+            >
+                <button
+                    onClick={scrollToTop}
+                    title="Scroll to top"
+                    style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: "50%",
+                        fontSize: 20,
+                        cursor: "pointer",
+                    }}
+                >
+                    ↑
+                </button>
+
+                <button
+                    onClick={scrollToBottom}
+                    title="Scroll to bottom"
+                    style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: "50%",
+                        fontSize: 20,
+                        cursor: "pointer",
+                    }}
+                >
+                    ↓
+                </button>
             </div>
         </div>
     );
