@@ -227,6 +227,8 @@ export default function AdminResourcePage({
             .select(`id, ${captionField}`)
             .in("id", uniqueIds);
 
+        const rows = (data || []) as any[];
+
         if (error) throw error;
 
         const lookup: Record<string, string> = {};
