@@ -472,7 +472,7 @@ export default function AdminResourcePage({
 
         const shouldReloadStats = refreshStats || !alreadyHasStats;
 
-        if (shouldReloadStats) {
+        if (shouldReloadStats && statsConfig?.enabled) {
             setStatsLoading(true);
         }
 
@@ -483,11 +483,10 @@ export default function AdminResourcePage({
 
             if (countError) throw countError;
 
-            const totalCaptionsCount = count ?? 0;
-            setTotalRowCount(totalCaptionsCount);
+            const totalCount = count ?? 0;
+            setTotalRowCount(totalCount);
 
             if (statsConfig?.enabled && paginationConfig?.enabled) {
-                // 🔥 NEW: handle newest / oldest sorting WITHOUT stats
                 if (ratingSortMode === "newest" || ratingSortMode === "oldest") {
                     const { data, error } = await supabase
                         .from(tableName)
@@ -508,7 +507,7 @@ export default function AdminResourcePage({
                 if (shouldReloadStats) {
                     const allRatings = await fetchAllRatings();
                     statsMap = buildGroupedStats(allRatings);
-                    await buildStatsSummary(statsMap, totalCaptionsCount);
+                    await buildStatsSummary(statsMap, totalCount);
                     setStatsByCaptionId(statsMap);
                 }
 
@@ -517,7 +516,22 @@ export default function AdminResourcePage({
                 const loadedRows = await fetchCaptionRowsByIds(idsToLoad);
 
                 setRows(loadedRows);
+                return;
             }
+
+            let query = supabase.from(tableName).select("*");
+
+            if (paginationConfig?.enabled) {
+                query = query.range(0, loadedLimit - 1);
+            } else {
+                query = query.limit(100);
+            }
+
+            const { data, error } = await query;
+
+            if (error) throw error;
+
+            setRows(data || []);
         } catch (e: any) {
             setError(e?.message || "Failed to load data");
             setStatsError(e?.message || "Failed to load statistics");
@@ -528,7 +542,7 @@ export default function AdminResourcePage({
         } finally {
             setLoading(false);
 
-            if (shouldReloadStats) {
+            if (shouldReloadStats && statsConfig?.enabled) {
                 setStatsLoading(false);
             }
         }
@@ -651,7 +665,6 @@ export default function AdminResourcePage({
     return (
         <div>
             <h2>{title}</h2>
-            <p>Table: {tableName}</p>
 
             <div style={{ marginBottom: 20 }}>
                 <button onClick={() => load(true)}>Reload</button>
@@ -837,7 +850,9 @@ export default function AdminResourcePage({
                     <span>{message}</span>
 
                     {showUndo && lastDeletedRow && (
-                        <button onClick={undoDelete}>Undo Delete</button>
+                        <button onClick={undoDelete} className="admin-btn">
+                            Undo Delete
+                        </button>
                     )}
                 </div>
             )}
@@ -853,7 +868,7 @@ export default function AdminResourcePage({
                         style={{ width: "100%", maxWidth: 800 }}
                     />
                     <br />
-                    <button onClick={createRow} style={{ marginTop: 10 }}>
+                    <button onClick={createRow} className="admin-btn admin-btn-primary" style={{ marginTop: 10 }}>
                         Create Row
                     </button>
                 </div>
@@ -934,11 +949,14 @@ export default function AdminResourcePage({
 
                             {mode !== "read" && row.id ? (
                                 <div style={{ marginTop: 12 }}>
-                                    <button onClick={() => startEdit(row)}>Edit Row</button>
+                                    <button onClick={() => startEdit(row)} className="admin-btn">
+                                        Edit Row
+                                    </button>
 
                                     {mode === "crud" && (
                                         <button
                                             onClick={() => deleteRow(row)}
+                                            className="admin-btn admin-btn-danger"
                                             style={{ marginLeft: 8 }}
                                         >
                                             Delete Row
@@ -956,14 +974,16 @@ export default function AdminResourcePage({
                                         style={{ width: "100%", maxWidth: 800 }}
                                     />
                                     <br />
-                                    <button onClick={saveChanges} style={{ marginTop: 10 }}>
+                                    <button onClick={saveChanges} className="admin-btn admin-btn-primary" style={{ marginTop: 10 }}>
                                         Save Changes
                                     </button>
+
                                     <button
                                         onClick={() => {
                                             setEditingId(null);
                                             setEditText("{}");
                                         }}
+                                        className="admin-btn"
                                         style={{ marginLeft: 8 }}
                                     >
                                         Cancel
@@ -979,7 +999,10 @@ export default function AdminResourcePage({
                 totalRowCount !== null &&
                 rows.length < totalRowCount && (
                     <div style={{ marginTop: 24 }}>
-                        <button onClick={() => setLoadedLimit((prev) => prev + pageSize)}>
+                        <button
+                            onClick={() => setLoadedLimit((prev) => prev + pageSize)}
+                            className="admin-btn"
+                        >
                             Load 30 more
                         </button>
                     </div>
@@ -1027,3 +1050,17 @@ export default function AdminResourcePage({
         </div>
     );
 }
+const buttonStyle: React.CSSProperties = {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #555",
+    background: "#1e1e1e",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 13,
+};
+
+const dangerButtonStyle: React.CSSProperties = {
+    ...buttonStyle,
+    border: "1px solid #a33",
+};

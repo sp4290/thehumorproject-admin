@@ -6,7 +6,7 @@ export default function LlmResponsesPage() {
     return (
         <AdminResourcePage
             title="LLM Responses"
-            tableName="llm_responses"
+            tableName="llm_model_responses"
             mode="read"
         />
     );

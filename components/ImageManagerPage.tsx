@@ -1,12 +1,34 @@
 "use client";
 
 import { supabase } from "@/lib/supabase";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+const buttonStyle: React.CSSProperties = {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #555",
+    background: "#1e1e1e",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 13,
+};
+
+const primaryButtonStyle: React.CSSProperties = {
+    ...buttonStyle,
+    border: "1px solid #555",
+};
+
+const dangerButtonStyle: React.CSSProperties = {
+    ...buttonStyle,
+    border: "1px solid #a33",
+};
 
 export default function ImageManagerPage() {
     const [images, setImages] = useState<any[]>([]);
     const [url, setUrl] = useState("");
     const [file, setFile] = useState<File | null>(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editText, setEditText] = useState("{}");
     const [loading, setLoading] = useState(true);
@@ -50,9 +72,7 @@ export default function ImageManagerPage() {
 
         const { data, error } = await supabase
             .from("images")
-            .insert({
-                url: url.trim(),
-            })
+            .insert({ url: url.trim() })
             .select()
             .single();
 
@@ -67,23 +87,21 @@ export default function ImageManagerPage() {
         setShowUndo(false);
         setLastDeletedImage(null);
 
-        if (data) {
-            setImages((prev) => [data, ...prev]);
-        } else {
-            load();
-        }
+        if (data) setImages((prev) => [data, ...prev]);
+        else load();
     };
 
     const uploadFile = async () => {
-        if (!file) return;
+        if (!file) {
+            alert("Please choose a file first.");
+            return;
+        }
 
         const filePath = `admin-uploads/${Date.now()}-${file.name}`;
 
         const { error: uploadError } = await supabase.storage
             .from(bucket)
-            .upload(filePath, file, {
-                upsert: false,
-            });
+            .upload(filePath, file, { upsert: false });
 
         if (uploadError) {
             alert(uploadError.message);
@@ -94,13 +112,9 @@ export default function ImageManagerPage() {
             .from(bucket)
             .getPublicUrl(filePath);
 
-        const publicUrl = publicUrlData.publicUrl;
-
         const { data, error: insertError } = await supabase
             .from("images")
-            .insert({
-                url: publicUrl,
-            })
+            .insert({ url: publicUrlData.publicUrl })
             .select()
             .single();
 
@@ -110,16 +124,15 @@ export default function ImageManagerPage() {
         }
 
         setFile(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+
         setMessage("Image uploaded and image row created.");
         setHighlightId(data?.id || null);
         setShowUndo(false);
         setLastDeletedImage(null);
 
-        if (data) {
-            setImages((prev) => [data, ...prev]);
-        } else {
-            load();
-        }
+        if (data) setImages((prev) => [data, ...prev]);
+        else load();
     };
 
     const startEdit = (row: any) => {
@@ -183,9 +196,8 @@ export default function ImageManagerPage() {
         setLastDeletedImage(imageRow);
         setShowUndo(true);
         setMessage("Image row deleted.");
-        if (highlightId === imageRow.id) {
-            setHighlightId(null);
-        }
+
+        if (highlightId === imageRow.id) setHighlightId(null);
     };
 
     const undoDelete = async () => {
@@ -212,7 +224,6 @@ export default function ImageManagerPage() {
     return (
         <div>
             <h2>Images</h2>
-            <p>Table: images</p>
 
             <div style={{ marginBottom: 20 }}>
                 <button onClick={load}>Reload</button>
@@ -223,7 +234,7 @@ export default function ImageManagerPage() {
                     style={{
                         marginBottom: 20,
                         padding: 12,
-                        border: "1px solid #2d6a4f",
+                        border: "1px solid #555",
                         borderRadius: 8,
                         display: "flex",
                         alignItems: "center",
@@ -234,7 +245,9 @@ export default function ImageManagerPage() {
                     <span>{message}</span>
 
                     {showUndo && lastDeletedImage && (
-                        <button onClick={undoDelete}>Undo Delete</button>
+                        <button onClick={undoDelete} style={buttonStyle}>
+                            Undo Delete
+                        </button>
                     )}
                 </div>
             )}
@@ -248,14 +261,20 @@ export default function ImageManagerPage() {
                 }}
             >
                 <h3>Create Image From URL</h3>
+
                 <input
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://..."
                     style={{ width: "100%", maxWidth: 500 }}
                 />
+
                 <br />
-                <button onClick={createFromUrl} style={{ marginTop: 10 }}>
+
+                <button
+                    onClick={createFromUrl}
+                    style={{ ...primaryButtonStyle, marginTop: 10 }}
+                >
                     Create Image Row
                 </button>
             </div>
@@ -269,16 +288,41 @@ export default function ImageManagerPage() {
                 }}
             >
                 <h3>Upload New Image File</h3>
-                <p>
-                    Uses Supabase Storage bucket: <b>{bucket}</b>
-                </p>
+
                 <input
+                    ref={fileInputRef}
                     type="file"
                     accept="image/*"
+                    style={{ display: "none" }}
                     onChange={(e) => setFile(e.target.files?.[0] || null)}
                 />
-                <br />
-                <button onClick={uploadFile} style={{ marginTop: 10 }}>
+
+                <div
+                    style={{
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        marginTop: 10,
+                    }}
+                >
+                    <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        style={buttonStyle}
+                    >
+                        Choose File
+                    </button>
+
+                    <span style={{ fontSize: 13, opacity: 0.85 }}>
+                        {file ? file.name : "No file chosen"}
+                    </span>
+                </div>
+
+                <button
+                    onClick={uploadFile}
+                    style={{ ...primaryButtonStyle, marginTop: 10 }}
+                >
                     Upload File and Create Row
                 </button>
             </div>
@@ -315,14 +359,17 @@ export default function ImageManagerPage() {
                                 overflowX: "auto",
                             }}
                         >
-              {JSON.stringify(img, null, 2)}
-            </pre>
+                            {JSON.stringify(img, null, 2)}
+                        </pre>
 
                         <div style={{ marginTop: 12 }}>
-                            <button onClick={() => startEdit(img)}>Edit Row</button>
+                            <button onClick={() => startEdit(img)} style={buttonStyle}>
+                                Edit Row
+                            </button>
+
                             <button
                                 onClick={() => deleteImage(img)}
-                                style={{ marginLeft: 8 }}
+                                style={{ ...dangerButtonStyle, marginLeft: 8 }}
                             >
                                 Delete Row
                             </button>
@@ -330,22 +377,28 @@ export default function ImageManagerPage() {
 
                         {editingId === img.id && (
                             <div style={{ marginTop: 12 }}>
-                <textarea
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    rows={12}
-                    style={{ width: "100%", maxWidth: 800 }}
-                />
+                                <textarea
+                                    value={editText}
+                                    onChange={(e) => setEditText(e.target.value)}
+                                    rows={12}
+                                    style={{ width: "100%", maxWidth: 800 }}
+                                />
+
                                 <br />
-                                <button onClick={saveChanges} style={{ marginTop: 10 }}>
+
+                                <button
+                                    onClick={saveChanges}
+                                    style={{ ...primaryButtonStyle, marginTop: 10 }}
+                                >
                                     Save Changes
                                 </button>
+
                                 <button
                                     onClick={() => {
                                         setEditingId(null);
                                         setEditText("{}");
                                     }}
-                                    style={{ marginLeft: 8 }}
+                                    style={{ ...buttonStyle, marginLeft: 8 }}
                                 >
                                     Cancel
                                 </button>

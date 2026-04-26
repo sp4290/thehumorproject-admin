@@ -66,12 +66,15 @@ export default function AdminShell({ children }: { children: ReactNode }) {
     if (state === "not_logged_in") {
         return (
             <div style={{ padding: 40 }}>
-                <h1>Humor Project Admin</h1>
-                <p>You must log in first to access the admin dashboard.</p>
-                <LoginButton />
-                <p style={{ marginTop: 20 }}>
-                    <a href="/">Go back home</a>
+                <h1 style={{ marginTop: 0 }}>Humor Project Admin</h1>
+
+                <p style={{ marginTop: 10 }}>
+                    Log in with Google to access the admin dashboard.
                 </p>
+
+                <div style={{ marginTop: 30 }}>
+                    <LoginButton />
+                </div>
             </div>
         );
     }
@@ -79,7 +82,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
     if (state === "not_superadmin") {
         return (
             <div style={{ padding: 40, maxWidth: 600 }}>
-                <h1>Humor Project Admin</h1>
+                <h1 style={{ marginTop: 0 }}>Humor Project Admin</h1>
 
                 <p style={{ marginTop: 10 }}>
                     Logged in as: <b>{email}</b>
@@ -93,7 +96,6 @@ export default function AdminShell({ children }: { children: ReactNode }) {
                     You must set <b>is_superadmin = true</b> in the profiles table in Supabase.
                 </p>
 
-                {/* move logout button lower */}
                 <div style={{ marginTop: 30 }}>
                     <LoginButton />
                 </div>

@@ -24,3 +24,29 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.admin-btn {
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #1a1a1a;
+    color: #eee;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.admin-btn:hover {
+}
+
+.admin-btn-primary {
+}
+
+.admin-btn-primary:hover {
+}
+
+.admin-btn-danger {
+
+}
+
+.admin-btn-danger:hover {
+}
